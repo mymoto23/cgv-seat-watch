@@ -38,6 +38,15 @@ const alert = (title, message) => fetch('https://ntfy.sh', {
   body: JSON.stringify({ topic: ALERT_TOPIC, title, message, priority: 5, tags: ['tada'] }),
 }).catch(() => {});
 
+async function warnDown(reason) {
+  // one 'watcher down' push, throttled: skip if we already warned in the last 3h
+  try {
+    const r = await fetch(`https://ntfy.sh/${ALERT_TOPIC}/json?poll=1&since=3h`);
+    if ((await r.text()).includes('WATCHER DOWN')) return;
+  } catch {}
+  await alert('⚠️ WATCHER DOWN', `CGV 좌석 감시가 실패했습니다: ${reason}\n로그: https://github.com/mymoto23/cgv-seat-watch/actions`);
+}
+
 async function boot() {
   const browser = await chromium.launch({ headless: true, args: ['--disable-blink-features=AutomationControlled'] });
   const ctx = await browser.newContext({
@@ -48,7 +57,7 @@ async function boot() {
   await page.goto('https://cgv.co.kr', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(4000);
   const html = await page.content();
-  if (html.includes('비정상적으로')) { console.log('CLOUDFLARE_BLOCKED'); await browser.close(); process.exit(2); }
+  if (html.includes('비정상적으로')) { console.log('CLOUDFLARE_BLOCKED'); await warnDown('Cloudflare가 GitHub IP를 차단'); await browser.close(); process.exit(2); }
   return { browser, page };
 }
 
@@ -92,7 +101,7 @@ async function fetchSeats(page, sseq) {
         console.log('ERR', t.label, e.message.slice(0, 120));
         errStreak++;
         try { await session.browser.close(); } catch {}
-        if (errStreak > 5) { console.log('too many consecutive errors, giving up'); process.exit(3); }
+        if (errStreak > 5) { console.log('too many consecutive errors, giving up'); await warnDown('연속 오류 (API 응답 이상)'); process.exit(3); }
         session = await boot();
       }
     }
