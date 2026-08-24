@@ -5,14 +5,10 @@ on:
     - cron: '*/10 * * * *'   # every 10 min; each run polls ~9 min => near-continuous coverage
   workflow_dispatch: {}
 
-concurrency:
-  group: cgv-watch
-  cancel-in-progress: true   # a new tick takes over from a stale one
-
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -36,5 +32,5 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_STATE_TOPIC: ${{ secrets.NTFY_STATE_TOPIC }}
-          MINUTES: '9'
+          MINUTES: '12'  # overlaps the next run's setup window -> no coverage gap
         run: node poll.js
