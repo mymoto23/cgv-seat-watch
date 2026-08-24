@@ -2,7 +2,7 @@ name: CGV seat watch
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # every 15 min; quota-friendly for a private repo (single check per run)
+    - cron: '*/10 * * * *'   # every 10 min; each run polls ~9 min => near-continuous coverage
   workflow_dispatch: {}
 
 concurrency:
@@ -36,5 +36,5 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_STATE_TOPIC: ${{ secrets.NTFY_STATE_TOPIC }}
-          MINUTES: '1'   # single check per run (private-repo quota); raise to 9 + cron */10 on a public repo
+          MINUTES: '9'
         run: node poll.js
