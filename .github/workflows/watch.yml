@@ -1,0 +1,40 @@
+name: CGV seat watch
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 min; quota-friendly for a private repo (single check per run)
+  workflow_dispatch: {}
+
+concurrency:
+  group: cgv-watch
+  cancel-in-progress: true   # a new tick takes over from a stale one
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install playwright
+        run: npm install playwright
+
+      - name: Cache chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Poll seats
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_STATE_TOPIC: ${{ secrets.NTFY_STATE_TOPIC }}
+          MINUTES: '1'   # single check per run (private-repo quota); raise to 9 + cron */10 on a public repo
+        run: node poll.js
