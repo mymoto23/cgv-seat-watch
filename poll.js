@@ -2,18 +2,15 @@
 // Polls the seat-map API every 60s for MINUTES minutes, alerts via ntfy.sh on new seats.
 // State is stored in a ntfy topic so runs hand off to each other (no repo commits needed).
 const { chromium } = require('playwright');
+const { resolveTargets } = require('./resolve');
 
 const ALERT_TOPIC = process.env.NTFY_TOPIC;
 const STATE_TOPIC = process.env.NTFY_STATE_TOPIC;
 if (!ALERT_TOPIC || !STATE_TOPIC) { console.error('NTFY_TOPIC / NTFY_STATE_TOPIC env vars required'); process.exit(1); }
 
-const TARGETS = [
-  { sseq: '3', label: '오디세이 IMAX 8/29(토) 14:30' },
-  { sseq: '4', label: '오디세이 IMAX 8/29(토) 18:00' },
-];
+const CONFIG = require('./targets.json');
 const RUN_MS = Number(process.env.MINUTES || 9) * 60 * 1000;
 const DEADLINE = Date.now() + RUN_MS;
-const CUTOFF = Date.parse('2026-08-29T09:00:00Z'); // 18:00 KST show start
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function readBaseline() {
@@ -25,7 +22,7 @@ async function readBaseline() {
         const m = JSON.parse(lines[i]);
         if (m.event === 'message') {
           const b = JSON.parse(m.message);
-          if (b && Array.isArray(b['3']) && Array.isArray(b['4'])) return b;
+          if (b && typeof b === 'object' && Object.values(b).every(Array.isArray)) return b;
         }
       } catch {}
     }
@@ -61,8 +58,8 @@ async function boot() {
   return { browser, page };
 }
 
-async function fetchSeats(page, sseq) {
-  const u = `https://cgv.co.kr/api/v1/booking/searchIfSeatData?coCd=A420&siteNo=0013&scnYmd=20260829&scnsNo=018&scnSseq=${sseq}`;
+async function fetchSeats(page, t) {
+  const u = `https://cgv.co.kr/api/v1/booking/searchIfSeatData?coCd=A420&siteNo=${t.siteNo}&scnYmd=${t.scnYmd}&scnsNo=${t.scnsNo}&scnSseq=${t.scnSseq}`;
   const r = await page.evaluate(async (u) => {
     const res = await fetch(u, { credentials: 'include' });
     const text = await res.text();
@@ -73,27 +70,30 @@ async function fetchSeats(page, sseq) {
 }
 
 (async () => {
-  if (Date.now() > CUTOFF) { console.log('past cutoff — show has started; disable the workflow'); return; }
-  let baseline = await readBaseline();
   let session = await boot();
+  const targets = (await resolveTargets(session.page, CONFIG)).filter((t) => Date.now() < t.startEpoch);
+  if (!targets.length) { console.log('no live targets (all past showtime or unresolved) — nothing to do'); await session.browser.close(); return; }
+  console.log('watching:', targets.map((t) => t.label).join(' | '));
+  let baseline = await readBaseline();
   let alerts = 0, checks = 0, errStreak = 0;
-  while (Date.now() < DEADLINE && Date.now() < CUTOFF) {
-    for (const t of TARGETS) {
+  while (Date.now() < DEADLINE && targets.some((t) => Date.now() < t.startEpoch)) {
+    for (const t of targets) {
+      if (Date.now() >= t.startEpoch) continue;
       try {
-        const avail = await fetchSeats(session.page, t.sseq);
+        const avail = await fetchSeats(session.page, t);
         checks++; errStreak = 0;
-        const base = baseline ? (baseline[t.sseq] || []) : null;
+        const base = baseline && Object.prototype.hasOwnProperty.call(baseline, t.key) ? baseline[t.key] : null;
         if (base !== null) {
           const fresh = avail.filter((s) => !base.includes(s));
           if (fresh.length) {
             alerts++;
-            await alert(`CGV new seat! ${t.sseq === '3' ? '14:30' : '18:00'}`,
+            await alert(`CGV new seat! ${t.label}`,
               `${t.label}\n새 좌석: ${fresh.join(', ')}\n현재 ${avail.length}석: ${avail.join(', ')}\n예매: https://cgv.co.kr/cnm/movieBook`);
           }
         }
         if (!baseline) baseline = {};
-        if (JSON.stringify(baseline[t.sseq] || null) !== JSON.stringify(avail)) {
-          baseline[t.sseq] = avail;
+        if (JSON.stringify(baseline[t.key] || null) !== JSON.stringify(avail)) {
+          baseline[t.key] = avail;
           await publishState(baseline);
         }
         console.log(new Date().toISOString(), t.label, `${avail.length}: ${avail.join(',')}`);
