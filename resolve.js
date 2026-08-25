@@ -1,8 +1,11 @@
 // Resolve human-friendly targets.json entries into CGV schedule codes.
 // Runs inside an already-booted Playwright page (needed to pass Cloudflare).
 //
-// targets.json entry: { movie, site, date: "YYYYMMDD", times: ["HH:MM", ...], screen? }
+// targets.json entry: { movie, site, date: "YYYYMMDD", times?: [...], screen? }
 //   movie/site: substring match against CGV's movie & theater names
+//   times entries: "HH:MM" (exact) or "HH:MM-HH:MM" (inclusive start-time range);
+//                  omit times entirely to watch ALL showings that day.
+//                  CGV writes post-midnight shows as 25:00/26:00 under the previous date.
 //   screen (optional): substring match against screen name / format (e.g. "IMAX", "4DX")
 //
 // Returns [{ siteNo, scnYmd, scnsNo, scnSseq, label, startEpoch, key }]
@@ -41,16 +44,21 @@ async function resolveTargets(page, config) {
     const sch = await apiGet(page,
       `https://cgv.co.kr/api/v1/booking/searchSchByMov?coCd=A420&siteNo=${site.siteNo}&scnYmd=${t.date}&movNo=${movie.movNo}&rtctlScopCd=08`);
     const shows = Array.isArray(sch) ? sch : [];
-    for (const hhmm of t.times) {
-      const tm = hhmm.replace(':', '');
-      let matches = shows.filter((s) => s.scnsrtTm === tm);
+    const specs = t.times && t.times.length ? t.times : ['00:00-27:00']; // no times = all showings
+    for (const spec of specs) {
+      const range = spec.match(/^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/);
+      const toNum = (hhmm) => parseInt(hhmm.replace(':', ''), 10);
+      let matches = range
+        ? shows.filter((s) => parseInt(s.scnsrtTm, 10) >= toNum(range[1]) && parseInt(s.scnsrtTm, 10) <= toNum(range[2]))
+        : shows.filter((s) => s.scnsrtTm === spec.replace(':', ''));
       if (t.screen) matches = matches.filter((s) => `${s.scnsNm} ${s.movkndDsplNm}`.toLowerCase().includes(t.screen.toLowerCase()));
       if (!matches.length) {
-        console.log(`SKIP ${t.movie} ${t.date} ${hhmm}${t.screen ? ` (${t.screen})` : ''}: no showing. Times that day: ${shows.map((s) => `${s.scnsrtTm}(${s.scnsNm})`).join(', ') || 'none'}`);
+        console.log(`SKIP ${t.movie} ${t.date} ${spec}${t.screen ? ` (${t.screen})` : ''}: no showing. Times that day: ${shows.map((s) => `${s.scnsrtTm}(${s.scnsNm})`).join(', ') || 'none'}`);
         continue;
       }
       for (const s of matches) {
-        const d = t.date, startEpoch = Date.parse(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T${hhmm}:00+09:00`);
+        const d = t.date, hhmm = `${s.scnsrtTm.slice(0, 2)}:${s.scnsrtTm.slice(2)}`;
+        const startEpoch = Date.parse(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T00:00:00+09:00`) + parseInt(s.scnsrtTm.slice(0, 2), 10) * 3600e3 + parseInt(s.scnsrtTm.slice(2), 10) * 60e3;
         resolved.push({
           siteNo: site.siteNo, scnYmd: t.date, scnsNo: s.scnsNo, scnSseq: s.scnSseq,
           label: `${movie.movNm} ${s.scnsNm} ${Number(d.slice(4, 6))}/${Number(d.slice(6, 8))} ${hhmm}`,
@@ -60,7 +68,9 @@ async function resolveTargets(page, config) {
       }
     }
   }
-  return resolved;
+  // dedupe (a show can match both an exact time and an overlapping range)
+  const seen = new Set();
+  return resolved.filter((r) => !seen.has(r.key) && seen.add(r.key));
 }
 
 module.exports = { resolveTargets };
