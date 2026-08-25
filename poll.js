@@ -69,7 +69,7 @@ async function fetchSeats(page, sseq) {
     try { return { status: res.status, json: JSON.parse(text) }; } catch { return { status: res.status, raw: text.slice(0, 120) }; }
   }, u);
   if (!r.json || r.json.statusCode !== 0 || !r.json.data?.items?.length) throw new Error(`bad response ${r.status} ${r.raw || ''}`);
-  return r.json.data.items.flatMap((it) => it.seats || []).filter((s) => s.seatSaleYn === 'Y').map((s) => `${s.seatRowNm}${s.seatNo}`).sort();
+  return r.json.data.items.flatMap((it) => it.seats || []).filter((s) => s.seatSaleYn === 'Y' && s.seatSalfrmCd === '01').map((s) => `${s.seatRowNm}${s.seatNo}`).sort();
 }
 
 (async () => {
